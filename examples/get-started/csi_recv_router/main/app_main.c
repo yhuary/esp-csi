@@ -54,6 +54,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_now.h"
 
 #include "lwip/inet.h"
@@ -74,13 +75,13 @@
 /*
  * 1秒あたり何回pingするか。
  *
- * 100なので、後で
+ * 50なので、後で
  *
- * interval_ms = 1000 / 100 = 10 ms
+ * interval_ms = 1000 / 20 = 50 ms
  *
- * つまり10ms間隔でpingを開始する設定になる。
+ * つまり50ms間隔でpingを開始する設定になる。
  */
-#define CONFIG_SEND_FREQUENCY 100
+#define CONFIG_SEND_FREQUENCY 20 // 20 ping/s = 50ms間隔    
 
 
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
@@ -207,6 +208,27 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
      */
     static int s_count = 0;
 
+    // ===== 60秒間だけCSIを記録する =====
+    static int64_t start_time = 0;
+    static bool finished = false;
+
+    int64_t now = esp_timer_get_time();
+
+    // APからの最初のCSIを受信した時刻を開始時刻にする
+    if (start_time == 0) {
+        start_time = now;
+        ESP_LOGI(TAG, "===== START CSI RECORDING : 60 sec =====");
+    }
+
+    // 60秒経過したらCSI_DATAの出力を停止
+    if (now - start_time >= 60LL * 1000000LL) {
+        if (!finished) {
+            ESP_LOGI(TAG, "===== FINISH CSI RECORDING : 60 sec =====");
+            ESP_LOGI(TAG, "CSI samples = %d", s_count);
+            finished = true;
+        }
+        return;
+    }
 
     float compensate_gain = 1.0f;
     static uint8_t agc_gain = 0;
