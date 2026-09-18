@@ -75,13 +75,13 @@
 /*
  * 1秒あたり何回pingするか。
  *
- * 20なので、後で
+ * 1000なので、後で
  *
- * interval_ms = 1000 / 20 = 50 ms
+ * interval_ms = 1000 / 1000 = 1 ms
  *
- * つまり50ms間隔でpingを開始する設定になる。
+ * つまり1ms間隔でpingを開始する設定になる。
  */
-#define CONFIG_SEND_FREQUENCY 20 // 20 ping/s = 50ms間隔    
+#define CONFIG_SEND_FREQUENCY 1000 // 1000 ping/s = 1ms間隔 (ここで設定してんのは周波数)   
 
 
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
@@ -106,6 +106,14 @@
 
 static const char *TAG = "csi_recv_router";
 
+/*
+ * ============================================================
+ * pingの実際の成功回数を数える
+ * ============================================================
+ */
+static volatile uint32_t ping_success_count = 0;
+
+static esp_ping_handle_t ping_handle = NULL;
 
 
 /*
@@ -221,14 +229,61 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     }
 
     // 60秒経過したらCSI_DATAの出力を停止
-    if (now - start_time >= 60LL * 1000000LL) {
-        if (!finished) {
-            ESP_LOGI(TAG, "===== FINISH CSI RECORDING : 60 sec =====");
-            ESP_LOGI(TAG, "CSI samples = %d", s_count);
-            finished = true;
-        }
-        return;
+if (now - start_time >= 60LL * 1000000LL) {
+
+    if (!finished) {
+
+        uint32_t ping_requests = 0;
+        uint32_t ping_replies = 0;
+
+        /* 実際に送信したICMP Echo Request数 */
+        esp_ping_get_profile(
+            ping_handle,
+            ESP_PING_PROF_REQUEST,
+            &ping_requests,
+            sizeof(ping_requests)
+        );
+
+        /* 実際に受信したICMP Echo Reply数 */
+        esp_ping_get_profile(
+            ping_handle,
+            ESP_PING_PROF_REPLY,
+            &ping_replies,
+            sizeof(ping_replies)
+        );
+
+        ESP_LOGI(TAG,
+                 "===== FINISH CSI RECORDING : 60 sec =====");
+
+        ESP_LOGI(TAG,
+                 "ICMP Echo Requests = %lu",
+                 (unsigned long)ping_requests);
+
+        ESP_LOGI(TAG,
+                 "ICMP Echo Replies  = %lu",
+                 (unsigned long)ping_replies);
+
+        ESP_LOGI(TAG,
+                 "CSI samples   = %d",
+                 s_count);
+
+        ESP_LOGI(TAG,
+                 "ICMP Echo Requests rate = %.2f Hz",
+                 (float)ping_requests / 60.0f);
+
+        ESP_LOGI(TAG,
+                 "ICMP Echo Replies rate   = %.2f Hz",
+                 (float)ping_replies / 60.0f);
+
+        ESP_LOGI(TAG,
+                 "CSI sample rate   = %.2f Hz",
+                 (float)s_count / 60.0f);
+
+        finished = true;
     }
+
+    return;
+}
 
     float compensate_gain = 1.0f;
     static uint8_t agc_gain = 0;
@@ -341,6 +396,14 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
      *
      * の中にある。
      */
+
+     ESP_LOGI(TAG,
+         "CSI CHECK: rx_format=%d, second=%d, len=%d, valid=%d",
+         rx_ctrl->cur_bb_format,
+         rx_ctrl->second,
+         info->len,
+         rx_ctrl->rx_channel_estimate_info_vld);
+         
     ets_printf(
         "CSI_DATA,%d," MACSTR ",%d,%d,%d,%d,%d,%d,%d,%d,%d",
 
@@ -741,6 +804,17 @@ static void wifi_csi_init()
 
 
 
+
+
+/*
+ * Echo Replyを正常に受信したときに呼ばれる
+ */
+static void wifi_ping_success_cb(
+    esp_ping_handle_t hdl,
+    void *args)
+{
+    ping_success_count++;
+}
 /*
  * ============================================================
  * pingを開始する処理
@@ -749,7 +823,7 @@ static void wifi_csi_init()
 static esp_err_t wifi_ping_router_start()
 {
 
-    static esp_ping_handle_t ping_handle = NULL;
+
 
 
     /*
@@ -776,12 +850,12 @@ static esp_err_t wifi_ping_router_start()
      * ping間隔
      * ========================================================
      *
-     * CONFIG_SEND_FREQUENCY = 100
+     * CONFIG_SEND_FREQUENCY = 1000
      *
-     * 1000 / 100 = 10ms
+     * 1000 / 1000 = 1ms
      *
-     * → 10ms間隔
-     * → 設定上100 ping/s
+     * → 1ms間隔
+     * → 設定上1000 ping/s
      */
     ping_config.interval_ms =
         1000 / CONFIG_SEND_FREQUENCY;
@@ -839,7 +913,10 @@ static esp_err_t wifi_ping_router_start()
      *
      * ★ここにもCSI_DATAを出力する処理はない。
      */
-    esp_ping_callbacks_t cbs = { 0 };
+    esp_ping_callbacks_t cbs = { 
+        .on_ping_success = wifi_ping_success_cb,
+        .cb_args = NULL,    
+     };
 
 
     /*
@@ -925,6 +1002,7 @@ void app_main()
     wifi_csi_init();
 
 
+    
     /*
      * ========================================================
      * ③ ルータへのping開始
