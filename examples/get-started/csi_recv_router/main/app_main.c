@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -349,7 +350,9 @@ if (now - start_time >= 60LL * 1000000LL) {
     );
 
 #endif
-
+/* ★★★ 今回追加 ★★★ */
+s_count++;
+return;
 
 
 #if CONFIG_IDF_TARGET_ESP32C5 || \
@@ -397,27 +400,27 @@ if (now - start_time >= 60LL * 1000000LL) {
      * の中にある。
      */
 
-     ESP_LOGI(TAG,
-         "CSI CHECK: rx_format=%d, second=%d, len=%d, valid=%d",
-         rx_ctrl->cur_bb_format,
-         rx_ctrl->second,
-         info->len,
-         rx_ctrl->rx_channel_estimate_info_vld);
+    ESP_LOGI(TAG,
+    "CSI CHECK: format=%u, channel=%u, second=%u, "
+    "ht_sig=0x%08" PRIx32 ", "
+    "channel_est_len=%u, csi_len=%u, valid=%u",
+    rx_ctrl->cur_bb_format,
+    rx_ctrl->channel,
+    rx_ctrl->second,
+    rx_ctrl->he_siga1,
+    rx_ctrl->rx_channel_estimate_len,
+    info->len,
+    rx_ctrl->rx_channel_estimate_info_vld);
          
     ets_printf(
         "CSI_DATA,%d," MACSTR ",%d,%d,%d,%d,%d,%d,%d,%d,%d",
-
         s_count,
-
         MAC2STR(info->mac),
-
         rx_ctrl->rssi,
         rx_ctrl->rate,
         rx_ctrl->noise_floor,
-
         fft_gain,
         agc_gain,
-
         rx_ctrl->channel,
         rx_ctrl->timestamp,
         rx_ctrl->sig_len,
@@ -569,7 +572,6 @@ if (now - start_time >= 60LL * 1000000LL) {
      * CSIデータを最後まで順番に出力。
      */
     for (int i = 1; i < info->len; i++) {
-
         ets_printf(
             ",%d",
             (int16_t)(compensate_gain * info->buf[i])
@@ -814,6 +816,23 @@ static void wifi_ping_success_cb(
     void *args)
 {
     ping_success_count++;
+
+    uint32_t elapsed_time = 0;
+
+    ESP_ERROR_CHECK(
+        esp_ping_get_profile(
+            hdl,
+            ESP_PING_PROF_TIMEGAP,
+            &elapsed_time,
+            sizeof(elapsed_time)
+        )
+    );
+
+        ESP_LOGI(
+        TAG,
+        "PING TIMEGAP = %" PRIu32 " ms",
+        elapsed_time
+    );
 }
 /*
  * ============================================================
