@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "freertos/event_groups.h"
 
 #include "nvs_flash.h"
@@ -50,6 +51,77 @@
 #endif
 
 static const char *TAG = "csi_recv_router";
+/*キューに入れる箱の形*/ 
+#define CSI_MAX_LEN 512
+#define CSI_QUEUE_SIZE 20
+
+typedef struct {
+    int seq;
+    int len;
+    int8_t data[CSI_MAX_LEN];
+} csi_queue_item_t;
+
+static QueueHandle_t csi_queue = NULL;
+
+static uint32_t csi_received_count = 0;
+static uint32_t csi_processed_count = 0;
+static uint32_t csi_dropped_count = 0;
+
+/* QueueにCSIが来るまで待って、来たら item に取り出す*/
+static void csi_process_task(void *arg)
+{
+    csi_queue_item_t item;
+
+    while (1) {
+
+        if (xQueueReceive(csi_queue, &item, portMAX_DELAY) == pdTRUE) {
+
+            csi_processed_count++;
+
+            /*
+             * 今は何もしない。
+             *
+             * 後でここに
+             * ・ファイルへの保存
+             * ・シリアル出力
+             * ・データ処理
+             * などを追加する。
+             */
+        }
+    }
+}
+
+/*
+ * 60秒後にCSIの受信・処理・ドロップ数を表示するTask
+ */
+static void csi_stats_task(void *arg)
+{
+    /*
+     * 60秒待つ
+     */
+    vTaskDelay(pdMS_TO_TICKS(60000));
+
+    /*
+     * 60秒間の結果を1回だけ表示
+     */
+    ESP_LOGI(TAG, "===== 60 SEC RESULT =====");
+
+    ESP_LOGI(TAG, "CSI received  : %lu",
+             (unsigned long)csi_received_count);
+
+    ESP_LOGI(TAG, "CSI processed : %lu",
+             (unsigned long)csi_processed_count);
+
+    ESP_LOGI(TAG, "CSI dropped   : %lu",
+             (unsigned long)csi_dropped_count);
+
+    ESP_LOGI(TAG, "=========================");
+
+    /*
+     * このTask自身を終了
+     */
+    vTaskDelete(NULL);
+}
 
 static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 {
@@ -84,7 +156,7 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     ESP_LOGD(TAG, "compensate_gain %f, agc_gain %d, fft_gain %d", compensate_gain, agc_gain, fft_gain);
 #endif
 
-#if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32C61
+/*#if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32C61
     if (!s_count) {
         ESP_LOGI(TAG, "================ CSI RECV ================");
         ets_printf("type,seq,mac,rssi,rate,noise_floor,fft_gain,agc_gain,channel,local_timestamp,sig_len,rx_format,len,first_word,data\n");
@@ -104,9 +176,9 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
                rx_ctrl->aggregation, rx_ctrl->stbc, rx_ctrl->fec_coding, rx_ctrl->sgi,
                rx_ctrl->noise_floor, rx_ctrl->ampdu_cnt, rx_ctrl->channel, rx_ctrl->secondary_channel,
                rx_ctrl->timestamp, rx_ctrl->ant, rx_ctrl->sig_len, rx_ctrl->sig_mode);
-#endif
+#endif*/
 
-#if (CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61) && CSI_FORCE_LLTF
+/*#if (CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61) && CSI_FORCE_LLTF
 
     int16_t csi = ((int16_t)(((((uint16_t)info->buf[1]) << 8) | info->buf[0]) << 4) >> 4);
     ets_printf(",%d,%d,\"[%d", (info->len - 2) / 2, info->first_word_invalid, (int16_t)(compensate_gain * csi));
@@ -121,7 +193,25 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         ets_printf(",%d", (int16_t)(compensate_gain * info->buf[i]));
     }
 #endif
-    ets_printf("]\"\n");
+    ets_printf("]\"\n");*/
+
+    csi_received_count++;
+
+    csi_queue_item_t item;
+
+    item.seq = s_count;
+    item.len = info->len;
+
+    if (item.len > CSI_MAX_LEN) {
+        item.len = CSI_MAX_LEN;
+    }
+
+    memcpy(item.data, info->buf, item.len);
+
+    if (xQueueSend(csi_queue, &item, 0) != pdTRUE) {
+        csi_dropped_count++;
+    }
+
     s_count++;
 }
 
@@ -137,7 +227,7 @@ static void wifi_csi_init()
         .acquire_csi_force_lltf   = CSI_FORCE_LLTF,
         .acquire_csi_ht20         = true,
         .acquire_csi_ht40         = true,
-        .acquire_csi_vht          = false,
+        .acquire_csi_vht          = true,
         .acquire_csi_su           = false,
         .acquire_csi_mu           = false,
         .acquire_csi_dcm          = false,
@@ -215,6 +305,48 @@ void app_main()
      *        for more information about this function.
      */
     ESP_ERROR_CHECK(example_connect());
+
+    /*
+     * CSIデータを一時的に入れるQueueを作成
+     */
+    csi_queue = xQueueCreate(
+        CSI_QUEUE_SIZE,
+        sizeof(csi_queue_item_t)
+    );
+
+    if (csi_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create CSI queue");
+        return;
+    }
+
+    /*
+     * QueueからCSIを取り出すTaskを作成
+     */
+    BaseType_t task_result = xTaskCreate(
+        csi_process_task,      // 実行する関数
+        "csi_process_task",    // Task名
+        4096,                  // Stackサイズ
+        NULL,                  // 引数
+        5,                     // Priority
+        NULL                   // Task handle
+    );
+
+    if (task_result != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create CSI task");
+        return;
+    }
+
+    /*
+    * 60秒後に結果を表示するTaskを作成
+    */
+    xTaskCreate(
+        csi_stats_task,
+        "csi_stats_task",
+        2048,
+        NULL,
+        4,
+        NULL
+    );
 
     wifi_csi_init();
     wifi_ping_router_start();
