@@ -56,8 +56,10 @@ static const char *TAG = "csi_recv_router";
 #define CSI_QUEUE_SIZE 20
 
 typedef struct {
-    int seq;
-    int len;
+    int seq; //CSIの通し番号(シーケンス番号)
+    int len; //raw CSI配列の要素数
+    int8_t rssi; //受信状況確認(ほんとになる？)
+    uint32_t timestamp; //CSI受信時のタイムスタンプ(マイクロ秒)
     int8_t data[CSI_MAX_LEN];
 } csi_queue_item_t;
 
@@ -176,7 +178,7 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
                rx_ctrl->aggregation, rx_ctrl->stbc, rx_ctrl->fec_coding, rx_ctrl->sgi,
                rx_ctrl->noise_floor, rx_ctrl->ampdu_cnt, rx_ctrl->channel, rx_ctrl->secondary_channel,
                rx_ctrl->timestamp, rx_ctrl->ant, rx_ctrl->sig_len, rx_ctrl->sig_mode);
-#endif*/
+#endif
 
 /*#if (CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61) && CSI_FORCE_LLTF
 
