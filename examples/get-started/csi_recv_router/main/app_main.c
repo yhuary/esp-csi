@@ -36,14 +36,14 @@
 #include "protocol_examples_common.h"
 #include "esp_csi_gain_ctrl.h"
 
-#define CONFIG_SEND_FREQUENCY      100
+#define CONFIG_SEND_FREQUENCY 100
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
-#define CSI_FORCE_LLTF                      0
+#define CSI_FORCE_LLTF 0
 #endif
-#define CONFIG_FORCE_GAIN                   0
+#define CONFIG_FORCE_GAIN 0
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32C61
-#define CONFIG_GAIN_CONTROL                 1
+#define CONFIG_GAIN_CONTROL 1
 #endif
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
@@ -51,15 +51,16 @@
 #endif
 
 static const char *TAG = "csi_recv_router";
-/*キューに入れる箱の形*/ 
+/*キューに入れる箱の形*/
 #define CSI_MAX_LEN 512
 #define CSI_QUEUE_SIZE 20
 
-typedef struct {
-    int seq; //CSIの通し番号(シーケンス番号)
-    int len; //raw CSI配列の要素数
-    int8_t rssi; //受信状況確認(ほんとになる？)
-    uint32_t timestamp; //CSI受信時のタイムスタンプ(マイクロ秒)
+typedef struct
+{
+    int seq;            // CSIの通し番号(シーケンス番号)
+    int len;            // raw CSI配列の要素数
+    int8_t rssi;        // 受信状況確認(ほんとになる？)
+    uint32_t timestamp; // CSI受信時のタイムスタンプ(マイクロ秒)
     int8_t data[CSI_MAX_LEN];
 } csi_queue_item_t;
 
@@ -74,9 +75,11 @@ static void csi_process_task(void *arg)
 {
     csi_queue_item_t item;
 
-    while (1) {
+    while (1)
+    {
 
-        if (xQueueReceive(csi_queue, &item, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(csi_queue, &item, portMAX_DELAY) == pdTRUE)
+        {
 
             csi_processed_count++;
 
@@ -127,12 +130,14 @@ static void csi_stats_task(void *arg)
 
 static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 {
-    if (!info || !info->buf) {
+    if (!info || !info->buf)
+    {
         ESP_LOGW(TAG, "<%s> wifi_csi_cb", esp_err_to_name(ESP_ERR_INVALID_ARG));
         return;
     }
 
-    if (memcmp(info->mac, ctx, 6)) {
+    if (memcmp(info->mac, ctx, 6))
+    {
         return;
     }
 
@@ -145,9 +150,12 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     static uint8_t agc_gain_baseline = 0;
     static int8_t fft_gain_baseline = 0;
     esp_csi_gain_ctrl_get_rx_gain(rx_ctrl, &agc_gain, &fft_gain);
-    if (s_count < 100) {
+    if (s_count < 100)
+    {
         esp_csi_gain_ctrl_record_rx_gain(agc_gain, fft_gain);
-    } else if (s_count == 100) {
+    }
+    else if (s_count == 100)
+    {
         esp_csi_gain_ctrl_get_rx_gain_baseline(&agc_gain_baseline, &fft_gain_baseline);
 #if CONFIG_FORCE_GAIN
         esp_csi_gain_ctrl_set_rx_force_gain(agc_gain_baseline, fft_gain_baseline);
@@ -158,44 +166,44 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     ESP_LOGD(TAG, "compensate_gain %f, agc_gain %d, fft_gain %d", compensate_gain, agc_gain, fft_gain);
 #endif
 
-/*#if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32C61
-    if (!s_count) {
-        ESP_LOGI(TAG, "================ CSI RECV ================");
-        ets_printf("type,seq,mac,rssi,rate,noise_floor,fft_gain,agc_gain,channel,local_timestamp,sig_len,rx_format,len,first_word,data\n");
-    }
-    ets_printf("CSI_DATA,%d," MACSTR ",%d,%d,%d,%d,%d,%d,%d,%d,%d",
-               s_count, MAC2STR(info->mac), rx_ctrl->rssi, rx_ctrl->rate,
-               rx_ctrl->noise_floor, fft_gain, agc_gain, rx_ctrl->channel,
-               rx_ctrl->timestamp, rx_ctrl->sig_len, rx_ctrl->cur_bb_format);
-#else
-    if (!s_count) {
-        ESP_LOGI(TAG, "================ CSI RECV ================");
-        ets_printf("type,id,mac,rssi,rate,sig_mode,mcs,bandwidth,smoothing,not_sounding,aggregation,stbc,fec_coding,sgi,noise_floor,ampdu_cnt,channel,secondary_channel,local_timestamp,ant,sig_len,rx_format,len,first_word,data\n");
-    }
-    ets_printf("CSI_DATA,%d," MACSTR ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-               s_count, MAC2STR(info->mac), rx_ctrl->rssi, rx_ctrl->rate, rx_ctrl->sig_mode,
-               rx_ctrl->mcs, rx_ctrl->cwb, rx_ctrl->smoothing, rx_ctrl->not_sounding,
-               rx_ctrl->aggregation, rx_ctrl->stbc, rx_ctrl->fec_coding, rx_ctrl->sgi,
-               rx_ctrl->noise_floor, rx_ctrl->ampdu_cnt, rx_ctrl->channel, rx_ctrl->secondary_channel,
-               rx_ctrl->timestamp, rx_ctrl->ant, rx_ctrl->sig_len, rx_ctrl->sig_mode);
-#endif
+    /*#if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32C61
+        if (!s_count) {
+            ESP_LOGI(TAG, "================ CSI RECV ================");
+            ets_printf("type,seq,mac,rssi,rate,noise_floor,fft_gain,agc_gain,channel,local_timestamp,sig_len,rx_format,len,first_word,data\n");
+        }
+        ets_printf("CSI_DATA,%d," MACSTR ",%d,%d,%d,%d,%d,%d,%d,%d,%d",
+                   s_count, MAC2STR(info->mac), rx_ctrl->rssi, rx_ctrl->rate,
+                   rx_ctrl->noise_floor, fft_gain, agc_gain, rx_ctrl->channel,
+                   rx_ctrl->timestamp, rx_ctrl->sig_len, rx_ctrl->cur_bb_format);
+    #else
+        if (!s_count) {
+            ESP_LOGI(TAG, "================ CSI RECV ================");
+            ets_printf("type,id,mac,rssi,rate,sig_mode,mcs,bandwidth,smoothing,not_sounding,aggregation,stbc,fec_coding,sgi,noise_floor,ampdu_cnt,channel,secondary_channel,local_timestamp,ant,sig_len,rx_format,len,first_word,data\n");
+        }
+        ets_printf("CSI_DATA,%d," MACSTR ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+                   s_count, MAC2STR(info->mac), rx_ctrl->rssi, rx_ctrl->rate, rx_ctrl->sig_mode,
+                   rx_ctrl->mcs, rx_ctrl->cwb, rx_ctrl->smoothing, rx_ctrl->not_sounding,
+                   rx_ctrl->aggregation, rx_ctrl->stbc, rx_ctrl->fec_coding, rx_ctrl->sgi,
+                   rx_ctrl->noise_floor, rx_ctrl->ampdu_cnt, rx_ctrl->channel, rx_ctrl->secondary_channel,
+                   rx_ctrl->timestamp, rx_ctrl->ant, rx_ctrl->sig_len, rx_ctrl->sig_mode);
+    #endif
 
-/*#if (CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61) && CSI_FORCE_LLTF
+    #if (CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61) && CSI_FORCE_LLTF
 
-    int16_t csi = ((int16_t)(((((uint16_t)info->buf[1]) << 8) | info->buf[0]) << 4) >> 4);
-    ets_printf(",%d,%d,\"[%d", (info->len - 2) / 2, info->first_word_invalid, (int16_t)(compensate_gain * csi));
-    for (int i = 2; i < (info->len - 2); i += 2) {
-        csi = ((int16_t)(((((uint16_t)info->buf[i + 1]) << 8) | info->buf[i]) << 4) >> 4);
-        ets_printf(",%d", (int16_t)(compensate_gain * csi));
-    }
+        int16_t csi = ((int16_t)(((((uint16_t)info->buf[1]) << 8) | info->buf[0]) << 4) >> 4);
+        ets_printf(",%d,%d,\"[%d", (info->len - 2) / 2, info->first_word_invalid, (int16_t)(compensate_gain * csi));
+        for (int i = 2; i < (info->len - 2); i += 2) {
+            csi = ((int16_t)(((((uint16_t)info->buf[i + 1]) << 8) | info->buf[i]) << 4) >> 4);
+            ets_printf(",%d", (int16_t)(compensate_gain * csi));
+        }
 
-#else
-    ets_printf(",%d,%d,\"[%d", info->len, info->first_word_invalid, (int16_t)(compensate_gain * info->buf[0]));
-    for (int i = 1; i < info->len; i++) {
-        ets_printf(",%d", (int16_t)(compensate_gain * info->buf[i]));
-    }
-#endif
-    ets_printf("]\"\n");*/
+    #else
+        ets_printf(",%d,%d,\"[%d", info->len, info->first_word_invalid, (int16_t)(compensate_gain * info->buf[0]));
+        for (int i = 1; i < info->len; i++) {
+            ets_printf(",%d", (int16_t)(compensate_gain * info->buf[i]));
+        }
+    #endif
+        ets_printf("]\"\n");*/
 
     csi_received_count++;
 
@@ -204,13 +212,15 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     item.seq = s_count;
     item.len = info->len;
 
-    if (item.len > CSI_MAX_LEN) {
+    if (item.len > CSI_MAX_LEN)
+    {
         item.len = CSI_MAX_LEN;
     }
 
     memcpy(item.data, info->buf, item.len);
 
-    if (xQueueSend(csi_queue, &item, 0) != pdTRUE) {
+    if (xQueueSend(csi_queue, &item, 0) != pdTRUE)
+    {
         csi_dropped_count++;
     }
 
@@ -224,45 +234,43 @@ static void wifi_csi_init()
      */
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
     wifi_csi_config_t csi_config = {
-        .enable                   = true,
-        .acquire_csi_legacy       = true,
-        .acquire_csi_force_lltf   = CSI_FORCE_LLTF,
-        .acquire_csi_ht20         = true,
-        .acquire_csi_ht40         = true,
-        .acquire_csi_vht          = true,
-        .acquire_csi_su           = false,
-        .acquire_csi_mu           = false,
-        .acquire_csi_dcm          = false,
-        .acquire_csi_beamformed   = false,
+        .enable = true,
+        .acquire_csi_legacy = true,
+        .acquire_csi_force_lltf = CSI_FORCE_LLTF,
+        .acquire_csi_ht20 = true,
+        .acquire_csi_ht40 = true,
+        .acquire_csi_vht = true,
+        .acquire_csi_su = false,
+        .acquire_csi_mu = false,
+        .acquire_csi_dcm = false,
+        .acquire_csi_beamformed = false,
         .acquire_csi_he_stbc_mode = 2,
-        .val_scale_cfg            = 0,
-        .dump_ack_en              = false,
-        .reserved                 = false
-    };
+        .val_scale_cfg = 0,
+        .dump_ack_en = false,
+        .reserved = false};
 #elif CONFIG_IDF_TARGET_ESP32C6
     wifi_csi_config_t csi_config = {
-        .enable                 = true,
-        .acquire_csi_legacy     = true,
-        .acquire_csi_ht20       = true,
-        .acquire_csi_ht40       = true,
-        .acquire_csi_su         = false,
-        .acquire_csi_mu         = false,
-        .acquire_csi_dcm        = false,
+        .enable = true,
+        .acquire_csi_legacy = true,
+        .acquire_csi_ht20 = true,
+        .acquire_csi_ht40 = true,
+        .acquire_csi_su = false,
+        .acquire_csi_mu = false,
+        .acquire_csi_dcm = false,
         .acquire_csi_beamformed = false,
-        .acquire_csi_he_stbc    = 2,
-        .val_scale_cfg          = false,
-        .dump_ack_en            = false,
-        .reserved               = false
-    };
+        .acquire_csi_he_stbc = 2,
+        .val_scale_cfg = false,
+        .dump_ack_en = false,
+        .reserved = false};
 #else
     wifi_csi_config_t csi_config = {
-        .lltf_en           = true,
-        .htltf_en          = false,
-        .stbc_htltf2_en    = false,
-        .ltf_merge_en      = true,
+        .lltf_en = true,
+        .htltf_en = false,
+        .stbc_htltf2_en = false,
+        .ltf_merge_en = true,
         .channel_filter_en = true,
-        .manu_scale        = true,
-        .shift             = true,
+        .manu_scale = true,
+        .shift = true,
     };
 #endif
     static wifi_ap_record_t s_ap_info = {0};
@@ -277,10 +285,10 @@ static esp_err_t wifi_ping_router_start()
     static esp_ping_handle_t ping_handle = NULL;
 
     esp_ping_config_t ping_config = ESP_PING_DEFAULT_CONFIG();
-    ping_config.count             = 0;
-    ping_config.interval_ms       = 1000 / CONFIG_SEND_FREQUENCY;
-    ping_config.task_stack_size   = 3072;
-    ping_config.data_size         = 1;
+    ping_config.count = 0;
+    ping_config.interval_ms = 1000 / CONFIG_SEND_FREQUENCY;
+    ping_config.task_stack_size = 3072;
+    ping_config.data_size = 1;
 
     esp_netif_ip_info_t local_ip;
     esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &local_ip);
@@ -288,7 +296,7 @@ static esp_err_t wifi_ping_router_start()
     ping_config.target_addr.u_addr.ip4.addr = ip4_addr_get_u32(&local_ip.gw);
     ping_config.target_addr.type = ESP_IPADDR_TYPE_V4;
 
-    esp_ping_callbacks_t cbs = { 0 };
+    esp_ping_callbacks_t cbs = {0};
     esp_ping_new_session(&ping_config, &cbs, &ping_handle);
     esp_ping_start(ping_handle);
 
@@ -313,10 +321,10 @@ void app_main()
      */
     csi_queue = xQueueCreate(
         CSI_QUEUE_SIZE,
-        sizeof(csi_queue_item_t)
-    );
+        sizeof(csi_queue_item_t));
 
-    if (csi_queue == NULL) {
+    if (csi_queue == NULL)
+    {
         ESP_LOGE(TAG, "Failed to create CSI queue");
         return;
     }
@@ -325,30 +333,30 @@ void app_main()
      * QueueからCSIを取り出すTaskを作成
      */
     BaseType_t task_result = xTaskCreate(
-        csi_process_task,      // 実行する関数
-        "csi_process_task",    // Task名
-        4096,                  // Stackサイズ
-        NULL,                  // 引数
-        5,                     // Priority
-        NULL                   // Task handle
+        csi_process_task,   // 実行する関数
+        "csi_process_task", // Task名
+        4096,               // Stackサイズ
+        NULL,               // 引数
+        5,                  // Priority
+        NULL                // Task handle
     );
 
-    if (task_result != pdPASS) {
+    if (task_result != pdPASS)
+    {
         ESP_LOGE(TAG, "Failed to create CSI task");
         return;
     }
 
     /*
-    * 60秒後に結果を表示するTaskを作成
-    */
+     * 60秒後に結果を表示するTaskを作成
+     */
     xTaskCreate(
         csi_stats_task,
         "csi_stats_task",
         2048,
         NULL,
         4,
-        NULL
-    );
+        NULL);
 
     wifi_csi_init();
     wifi_ping_router_start();
