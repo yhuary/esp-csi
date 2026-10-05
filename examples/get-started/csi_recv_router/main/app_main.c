@@ -60,6 +60,13 @@ typedef struct {
     int len; //raw CSI配列の要素数
     int8_t rssi; //受信状況確認(ほんとになる？)
     uint32_t timestamp; //CSI受信時のタイムスタンプ(マイクロ秒)
+    
+    uint8_t channel; // CSIを受信したWi-Fiのプライマリチャネル番号
+    uint8_t rx_format; // 受信したWi-FiフレームのPHY形式（例：HT、VHT、HEなど）
+    uint8_t secondary_channel; // セカンダリチャネルの位置（なし／上側／下側）
+    uint8_t stbc; // 空間時間ブロック符号の使用状況
+    bool first_word_invalid; // 最初の4バイトが無効かどうか
+
     int8_t data[CSI_MAX_LEN];
 } csi_queue_item_t;
 
@@ -80,15 +87,41 @@ static void csi_process_task(void *arg)
 
             csi_processed_count++;
 
-            /*
-             * 今は何もしない。
+             /*
+             * 1サンプル分の基本情報
              *
-             * 後でここに
-             * ・ファイルへの保存
-             * ・シリアル出力
-             * ・データ処理
-             * などを追加する。
+             * 出力形式：
+             * CSI_DATA,seq,timestamp,rssi,len,"[CSIデータ]"
              */
+            ets_printf(
+                "CSI_DATA,%d,%lu,%d,%d,%d,%d,%d,%d,%d,\"[",
+                item.seq,
+                (unsigned long)item.timestamp,
+                item.rssi,
+                item.len,
+                item.channel,
+                item.rx_format,
+                item.secondary_channel,
+                item.stbc,
+                item.first_word_invalid
+            );
+
+            /*
+             * CSI raw dataを順番に出力
+             */
+            for (int i = 0; i < item.len; i++) {
+
+                if (i == 0) {
+                    ets_printf("%d", item.data[i]);
+                } else {
+                    ets_printf(",%d", item.data[i]);
+                }
+            }
+
+            /*
+             * 1サンプル終了
+             */
+            ets_printf("]\"\n");
         }
     }
 }
@@ -180,7 +213,7 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
                rx_ctrl->timestamp, rx_ctrl->ant, rx_ctrl->sig_len, rx_ctrl->sig_mode);
 #endif
 
-/*#if (CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61) && CSI_FORCE_LLTF
+#if (CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61) && CSI_FORCE_LLTF
 
     int16_t csi = ((int16_t)(((((uint16_t)info->buf[1]) << 8) | info->buf[0]) << 4) >> 4);
     ets_printf(",%d,%d,\"[%d", (info->len - 2) / 2, info->first_word_invalid, (int16_t)(compensate_gain * csi));
@@ -201,9 +234,26 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 
     csi_queue_item_t item;
 
+    /*
+    * CSIの基本情報をQueue用の構造体にコピー
+    */
+
     item.seq = s_count;
     item.len = info->len;
+    item.rssi = rx_ctrl->rssi;
+    item.timestamp = rx_ctrl->timestamp;
 
+    item.channel = rx_ctrl->channel;
+    item.rx_format = rx_ctrl->cur_bb_format;
+
+    item.secondary_channel = rx_ctrl->second;
+    item.stbc = rx_ctrl->stbc;
+
+    item.first_word_invalid = info->first_word_invalid;
+
+    /*
+    * CSIデータが配列サイズを超えないようにする
+    */
     if (item.len > CSI_MAX_LEN) {
         item.len = CSI_MAX_LEN;
     }
