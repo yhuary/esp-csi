@@ -73,6 +73,7 @@ typedef struct
 
 static QueueHandle_t csi_queue = NULL;
 
+static uint32_t ping_reply_count = 0;
 static uint32_t csi_received_count = 0;
 static uint32_t csi_processed_count = 0;
 static uint32_t csi_dropped_count = 0;
@@ -147,6 +148,7 @@ static void csi_stats_task(void *arg)
      */
     ESP_LOGI(TAG, "===== 60 SEC RESULT =====");
 
+
     ESP_LOGI(TAG, "CSI received  : %lu",
              (unsigned long)csi_received_count);
 
@@ -155,6 +157,9 @@ static void csi_stats_task(void *arg)
 
     ESP_LOGI(TAG, "CSI dropped   : %lu",
              (unsigned long)csi_dropped_count);
+
+    ESP_LOGI(TAG, "Ping reply     : %lu",
+            (unsigned long)ping_reply_count);
 
     ESP_LOGI(TAG, "=========================");
 
@@ -166,6 +171,7 @@ static void csi_stats_task(void *arg)
 
 static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 {
+
     if (!info || !info->buf)
     {
         ESP_LOGW(TAG, "<%s> wifi_csi_cb", esp_err_to_name(ESP_ERR_INVALID_ARG));
@@ -343,6 +349,12 @@ static void wifi_csi_init()
     ESP_ERROR_CHECK(esp_wifi_set_csi(true));
 }
 
+
+static void wifi_ping_on_success(esp_ping_handle_t hdl, void *args)
+{
+    ping_reply_count++;
+}
+
 static esp_err_t wifi_ping_router_start()
 {
     static esp_ping_handle_t ping_handle = NULL;
@@ -359,7 +371,10 @@ static esp_err_t wifi_ping_router_start()
     ping_config.target_addr.u_addr.ip4.addr = ip4_addr_get_u32(&local_ip.gw);
     ping_config.target_addr.type = ESP_IPADDR_TYPE_V4;
 
-    esp_ping_callbacks_t cbs = {0};
+   
+    esp_ping_callbacks_t cbs = {
+    .on_ping_success = wifi_ping_on_success,
+};
     esp_ping_new_session(&ping_config, &cbs, &ping_handle);
     esp_ping_start(ping_handle);
 
