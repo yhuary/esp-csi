@@ -19,6 +19,8 @@
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
 
+#include "driver/uart.h"
+
 #include "nvs_flash.h"
 
 #include "esp_mac.h"
@@ -74,6 +76,7 @@ typedef struct
 static QueueHandle_t csi_queue = NULL;
 
 static uint32_t ping_reply_count = 0;
+static uint32_t ping_timeout_count = 0;
 static uint32_t csi_received_count = 0;
 static uint32_t csi_processed_count = 0;
 static uint32_t csi_dropped_count = 0;
@@ -83,52 +86,25 @@ static void csi_process_task(void *arg)
 {
     csi_queue_item_t item;
 
+
     while (1)
     {
-
         if (xQueueReceive(csi_queue, &item, portMAX_DELAY) == pdTRUE)
         {
-
             csi_processed_count++;
 
-            /*
-             * 1サンプル分の基本情報
-             *
-             * 出力形式：
-             * CSI_DATA,seq,timestamp,rssi,len,"[CSIデータ]"
-             */
-            ets_printf(
-                "CSI_DATA,%d,%lu,%d,%d,%d,%d,%d,%d,%d,\"[",
-                item.seq,
-                (unsigned long)item.timestamp,
-                item.rssi,
-                item.len,
-                item.channel,
-                item.rx_format,
-                item.secondary_channel,
-                item.stbc,
-                item.first_word_invalid);
+            // 先頭マーカー
+            const uint8_t header[2] = {0xAA, 0x55};
 
-            /*
-             * CSI raw dataを順番に出力
-             */
-            for (int i = 0; i < item.len; i++)
-            {
+            // CSIデータの長さ
+            uint16_t len = (uint16_t)item.len;
 
-                if (i == 0)
-                {
-                    ets_printf("%d", item.data[i]);
-                }
-                else
-                {
-                    ets_printf(",%d", item.data[i]);
-                }
-            }
-
-            /*
-             * 1サンプル終了
-             */
-            ets_printf("]\"\n");
+            #if 0
+            // UARTにバイナリ送信
+            uart_write_bytes(UART_NUM_0, header, sizeof(header));
+            uart_write_bytes(UART_NUM_0, &len, sizeof(len));
+            uart_write_bytes(UART_NUM_0, item.data, item.len);
+            #endif
         }
     }
 }
@@ -141,12 +117,12 @@ static void csi_stats_task(void *arg)
     /*
      * 60秒待つ
      */
-    vTaskDelay(pdMS_TO_TICKS(60000));
+    vTaskDelay(pdMS_TO_TICKS(20000));
 
     /*
      * 60秒間の結果を1回だけ表示
      */
-    ESP_LOGI(TAG, "===== 60 SEC RESULT =====");
+    ESP_LOGI(TAG, "===== 20 SEC RESULT =====");
 
 
     ESP_LOGI(TAG, "CSI received  : %lu",
@@ -160,6 +136,13 @@ static void csi_stats_task(void *arg)
 
     ESP_LOGI(TAG, "Ping reply     : %lu",
             (unsigned long)ping_reply_count);
+
+    ESP_LOGI(TAG, "Ping timeout   : %lu",
+         (unsigned long)ping_timeout_count);
+
+ESP_LOGI(TAG, "Ping total     : %lu",
+         (unsigned long)(ping_reply_count + ping_timeout_count));
+         
 
     ESP_LOGI(TAG, "=========================");
 
@@ -355,6 +338,11 @@ static void wifi_ping_on_success(esp_ping_handle_t hdl, void *args)
     ping_reply_count++;
 }
 
+static void wifi_ping_on_timeout(esp_ping_handle_t hdl, void *args)
+{
+    ping_timeout_count++;
+}
+
 static esp_err_t wifi_ping_router_start()
 {
     static esp_ping_handle_t ping_handle = NULL;
@@ -374,6 +362,7 @@ static esp_err_t wifi_ping_router_start()
    
     esp_ping_callbacks_t cbs = {
     .on_ping_success = wifi_ping_on_success,
+    .on_ping_timeout = wifi_ping_on_timeout,
 };
     esp_ping_new_session(&ping_config, &cbs, &ping_handle);
     esp_ping_start(ping_handle);
@@ -386,6 +375,32 @@ void app_main()
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+        // UART0ドライバが未インストールの場合だけ初期化
+    if (!uart_is_driver_installed(UART_NUM_0))
+    {
+        uart_config_t uart_config = {
+            .baud_rate = 921600,
+            .data_bits = UART_DATA_8_BITS,
+            .parity = UART_PARITY_DISABLE,
+            .stop_bits = UART_STOP_BITS_1,
+            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+            .source_clk = UART_SCLK_DEFAULT,
+        };
+
+        ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart_config));
+
+        ESP_ERROR_CHECK(uart_driver_install(
+            UART_NUM_0,
+            4096,
+            4096,
+            0,
+            NULL,
+            0
+        ));
+    }
+
+
 
     /**
      * @brief This helper function configures Wi-Fi, as selected in menuconfig.
