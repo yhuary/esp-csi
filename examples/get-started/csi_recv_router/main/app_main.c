@@ -99,12 +99,12 @@ static void csi_process_task(void *arg)
             // CSIデータの長さ
             uint16_t len = (uint16_t)item.len;
 
-            #if 0
+            
             // UARTにバイナリ送信
             uart_write_bytes(UART_NUM_0, header, sizeof(header));
             uart_write_bytes(UART_NUM_0, &len, sizeof(len));
             uart_write_bytes(UART_NUM_0, item.data, item.len);
-            #endif
+        
         }
     }
 }
