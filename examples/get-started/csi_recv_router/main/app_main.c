@@ -101,9 +101,9 @@ static void csi_process_task(void *arg)
 
             
             // UARTにバイナリ送信
-            uart_write_bytes(UART_NUM_0, header, sizeof(header));
-            uart_write_bytes(UART_NUM_0, &len, sizeof(len));
-            uart_write_bytes(UART_NUM_0, item.data, item.len);
+            //uart_write_bytes(UART_NUM_0, header, sizeof(header));
+            //uart_write_bytes(UART_NUM_0, &len, sizeof(len));
+            //uart_write_bytes(UART_NUM_0, item.data, item.len);
         
         }
     }
@@ -140,7 +140,7 @@ static void csi_stats_task(void *arg)
     ESP_LOGI(TAG, "Ping timeout   : %lu",
          (unsigned long)ping_timeout_count);
 
-ESP_LOGI(TAG, "Ping total     : %lu",
+    ESP_LOGI(TAG, "Ping total     : %lu",
          (unsigned long)(ping_reply_count + ping_timeout_count));
          
 
@@ -152,7 +152,7 @@ ESP_LOGI(TAG, "Ping total     : %lu",
     vTaskDelete(NULL);
 }
 
-static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
+static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)//ctx 
 {
 
     if (!info || !info->buf)
@@ -261,6 +261,19 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 
     item.first_word_invalid = info->first_word_invalid;
 
+    // LTF判定用の実測ログ（最初の10件だけ表示）
+    if (s_count < 10)
+    {
+        ESP_LOGI(TAG,
+             "CSI CHECK: ch=%u, rx_format=%u, second=%u, stbc=%u, len=%d, first_invalid=%d",
+             (unsigned)item.channel,
+             (unsigned)item.rx_format,
+             (unsigned)item.secondary_channel,
+             (unsigned)item.stbc,
+             item.len,
+             (int)item.first_word_invalid);
+    }
+
     /*
      * CSIデータが配列サイズを超えないようにする
      */
@@ -287,10 +300,10 @@ static void wifi_csi_init()
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
     wifi_csi_config_t csi_config = {
         .enable = true,
-        .acquire_csi_legacy = true,
+        .acquire_csi_legacy = false,
         .acquire_csi_force_lltf = CSI_FORCE_LLTF,
         .acquire_csi_ht20 = true,
-        .acquire_csi_ht40 = true,
+        .acquire_csi_ht40 = false,
         .acquire_csi_vht = true,
         .acquire_csi_su = false,
         .acquire_csi_mu = false,
