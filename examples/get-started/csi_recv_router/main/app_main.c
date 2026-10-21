@@ -104,10 +104,10 @@ static void csi_process_task(void *arg)
 
             
             // UARTにバイナリ送信
-            uart_write_bytes(UART_NUM_0, header, sizeof(header));
-            uart_write_bytes(UART_NUM_0, &timestamp, sizeof(timestamp));
-            uart_write_bytes(UART_NUM_0, &len, sizeof(len));
-            uart_write_bytes(UART_NUM_0, item.data, item.len);
+            //uart_write_bytes(UART_NUM_0, header, sizeof(header));
+            //uart_write_bytes(UART_NUM_0, &timestamp, sizeof(timestamp));
+            //uart_write_bytes(UART_NUM_0, &len, sizeof(len));
+            //uart_write_bytes(UART_NUM_0, item.data, item.len);
         
         }
     }
@@ -387,6 +387,26 @@ static esp_err_t wifi_ping_router_start()
     return ESP_OK;
 }
 
+static void wifi_set_ht_protocols(void)
+{
+    wifi_protocols_t protocols = {
+        .ghz_2g = WIFI_PROTOCOL_11B |
+                  WIFI_PROTOCOL_11G |
+                  WIFI_PROTOCOL_11N,
+
+        .ghz_5g = WIFI_PROTOCOL_11A |
+                  WIFI_PROTOCOL_11N
+    };
+
+    ESP_ERROR_CHECK(
+        esp_wifi_set_protocols(WIFI_IF_STA, &protocols)
+    );
+}
+
+
+
+
+
 void app_main()
 {
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -425,6 +445,7 @@ void app_main()
      *        for more information about this function.
      */
     ESP_ERROR_CHECK(example_connect());
+
 
     /*
      * CSIデータを一時的に入れるQueueを作成
