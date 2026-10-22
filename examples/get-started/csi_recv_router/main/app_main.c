@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 
 #include "driver/uart.h"
 
@@ -29,6 +30,8 @@
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_now.h"
+#include "esp_event.h"
+#include "esp_err.h"
 
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
@@ -73,7 +76,20 @@ typedef struct
     int8_t data[CSI_MAX_LEN];
 } csi_queue_item_t;
 
+
+#define WIFI_MAXIMUM_RETRY 3
+
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT      BIT1
+
+static EventGroupHandle_t s_wifi_event_group = NULL;
+static int s_retry_num = 0;
+
+// 後始末中に再接続しないためのフラグ
+static bool s_wifi_shutting_down = false;
+
 static QueueHandle_t csi_queue = NULL;
+
 
 static uint32_t ping_reply_count = 0;
 static uint32_t ping_timeout_count = 0;
@@ -104,10 +120,10 @@ static void csi_process_task(void *arg)
 
             
             // UARTにバイナリ送信
-            //uart_write_bytes(UART_NUM_0, header, sizeof(header));
-            //uart_write_bytes(UART_NUM_0, &timestamp, sizeof(timestamp));
-            //uart_write_bytes(UART_NUM_0, &len, sizeof(len));
-            //uart_write_bytes(UART_NUM_0, item.data, item.len);
+            uart_write_bytes(UART_NUM_0, header, sizeof(header));
+            uart_write_bytes(UART_NUM_0, &timestamp, sizeof(timestamp));
+            uart_write_bytes(UART_NUM_0, &len, sizeof(len));
+            uart_write_bytes(UART_NUM_0, item.data, item.len);
         
         }
     }
@@ -246,7 +262,6 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)//ctx
     item.len = info->len;
     item.rssi = rx_ctrl->rssi;
     item.timestamp = rx_ctrl->timestamp;
-
     item.channel = rx_ctrl->channel;
     item.rx_format = rx_ctrl->cur_bb_format;
 
@@ -269,13 +284,13 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)//ctx
     if (s_count < 10)
     {
         ESP_LOGI(TAG,
-             "CSI CHECK: ch=%u, rx_format=%u, second=%u, stbc=%u, len=%d, first_invalid=%d",
-             (unsigned)item.channel,
-             (unsigned)item.rx_format,
-             (unsigned)item.secondary_channel,
-             (unsigned)item.stbc,
-             item.len,
-             (int)item.first_word_invalid);
+            "CSI CHECK: ch=%u, rx_format=%u, second=%u, stbc=%u, len=%d, first_invalid=%d",
+            (unsigned)item.channel,
+            (unsigned)item.rx_format,
+            (unsigned)item.secondary_channel,
+            (unsigned)item.stbc,
+            item.len,
+            (int)item.first_word_invalid);
     }
 
     /*
@@ -308,7 +323,7 @@ static void wifi_csi_init()
         .acquire_csi_force_lltf = CSI_FORCE_LLTF,
         .acquire_csi_ht20 = true,
         .acquire_csi_ht40 = false,
-        .acquire_csi_vht = true,
+        .acquire_csi_vht = false,
         .acquire_csi_su = false,
         .acquire_csi_mu = false,
         .acquire_csi_dcm = false,
@@ -403,9 +418,253 @@ static void wifi_set_ht_protocols(void)
     );
 }
 
+static void my_wifi_got_ip_handler(
+    void *arg,
+    esp_event_base_t event_base,
+    int32_t event_id,
+    void *event_data)
+{
+    ESP_LOGI(TAG, "IP address acquired");
 
+    s_retry_num = 0;
 
+    xEventGroupClearBits(
+        s_wifi_event_group,
+        WIFI_FAIL_BIT
+    );
 
+    xEventGroupSetBits(
+        s_wifi_event_group,
+        WIFI_CONNECTED_BIT
+    );
+}
+
+static void my_wifi_disconnected_handler(
+    void *arg,
+    esp_event_base_t event_base,
+    int32_t event_id,
+    void *event_data)
+{
+    ESP_LOGW(TAG, "Wi-Fi disconnected");
+
+    // 接続済みの状態を解除
+    xEventGroupClearBits(
+        s_wifi_event_group,
+        WIFI_CONNECTED_BIT
+    );
+
+    // 後始末中なら再接続しない
+    if (s_wifi_shutting_down) {
+        return;
+    }
+
+    // 最大3回まで再接続
+    if (s_retry_num < WIFI_MAXIMUM_RETRY) {
+
+        s_retry_num++;
+
+        ESP_LOGW(TAG,
+                 "Retry Wi-Fi connection: %d/%d",
+                 s_retry_num,
+                 WIFI_MAXIMUM_RETRY);
+
+        esp_err_t err = esp_wifi_connect();
+
+        if (err == ESP_OK) {
+            return;
+        }
+
+        ESP_LOGE(TAG,
+                 "Reconnect request failed: %s",
+                 esp_err_to_name(err));
+    }
+
+    // 再接続できない場合は失敗を通知
+    xEventGroupSetBits(
+        s_wifi_event_group,
+        WIFI_FAIL_BIT
+    );
+}
+
+static esp_err_t my_wifi_connect(void)
+{
+    esp_err_t err = ESP_OK;
+    bool wifi_initialized = false;
+    bool wifi_started = false;
+
+    esp_event_handler_instance_t got_ip_instance = NULL;
+    esp_event_handler_instance_t disconnected_instance = NULL;
+
+    s_retry_num = 0;
+    s_wifi_shutting_down = false;
+
+    // ① STA用ネットワークインターフェース作成
+    esp_netif_t *sta_netif =
+        esp_netif_create_default_wifi_sta();
+
+    if (sta_netif == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    // ② Event Group作成
+    s_wifi_event_group = xEventGroupCreate();
+
+    if (s_wifi_event_group == NULL) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    // ③ Wi-Fiドライバ初期化
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+
+    err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+    wifi_initialized = true;
+
+    // ④ STAモード設定
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+
+    // ⑤ イベントハンドラ登録
+    err = esp_event_handler_instance_register(
+        IP_EVENT,
+        IP_EVENT_STA_GOT_IP,
+        &my_wifi_got_ip_handler,
+        NULL,
+        &got_ip_instance
+    );
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+
+    err = esp_event_handler_instance_register(
+        WIFI_EVENT,
+        WIFI_EVENT_STA_DISCONNECTED,
+        &my_wifi_disconnected_handler,
+        NULL,
+        &disconnected_instance
+    );
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+
+    // ⑥ Wi-Fiドライバ起動
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+    wifi_started = true;
+
+    // ⑦ 使用するWi-Fi規格を設定
+    wifi_protocols_t protocols = {
+        .ghz_2g = WIFI_PROTOCOL_11B |
+                  WIFI_PROTOCOL_11G |
+                  WIFI_PROTOCOL_11N,
+
+        .ghz_5g = WIFI_PROTOCOL_11A |
+                  WIFI_PROTOCOL_11N
+    };
+
+    err = esp_wifi_set_protocols(WIFI_IF_STA, &protocols);
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+
+    // ⑧ SSID・パスワード設定
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = CONFIG_EXAMPLE_WIFI_SSID,
+            .password = CONFIG_EXAMPLE_WIFI_PASSWORD,
+        },
+    };
+
+    err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+
+    // ⑨ APへの接続開始
+    err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+
+    // ⑩ 接続成功・失敗の通知を待つ
+    EventBits_t bits = xEventGroupWaitBits(
+        s_wifi_event_group,
+        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+        pdFALSE,
+        pdFALSE,
+        pdMS_TO_TICKS(10000)
+    );
+
+    if (bits & WIFI_FAIL_BIT) {
+        ESP_LOGE(TAG, "Wi-Fi connection failed");
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+
+    if (!(bits & WIFI_CONNECTED_BIT)) {
+        ESP_LOGE(TAG, "Wi-Fi connection timeout");
+        err = ESP_ERR_TIMEOUT;
+        goto cleanup;
+    }
+
+    ESP_LOGI(TAG, "Wi-Fi connected and IP acquired");
+
+    // 成功時はイベント登録とEvent Groupを残す
+    return ESP_OK;
+
+cleanup:
+    ESP_LOGE(TAG,
+             "Wi-Fi setup failed: %s",
+             esp_err_to_name(err));
+
+    // 後始末中の再接続を禁止
+    s_wifi_shutting_down = true;
+
+    // Wi-Fiを停止
+    if (wifi_started) {
+        esp_wifi_stop();
+    }
+
+    // イベントハンドラ登録を解除
+    if (disconnected_instance != NULL) {
+        esp_event_handler_instance_unregister(
+            WIFI_EVENT,
+            WIFI_EVENT_STA_DISCONNECTED,
+            disconnected_instance
+        );
+    }
+
+    if (got_ip_instance != NULL) {
+        esp_event_handler_instance_unregister(
+            IP_EVENT,
+            IP_EVENT_STA_GOT_IP,
+            got_ip_instance
+        );
+    }
+
+    // Wi-Fiドライバの後始末
+    if (wifi_initialized) {
+        esp_wifi_deinit();
+    }
+
+    // Event Group削除
+    if (s_wifi_event_group != NULL) {
+        vEventGroupDelete(s_wifi_event_group);
+        s_wifi_event_group = NULL;
+    }
+
+    // ネットワークインターフェース削除
+    esp_netif_destroy_default_wifi(sta_netif);
+
+    return err;
+}
 
 void app_main()
 {
@@ -444,7 +703,7 @@ void app_main()
      *        Read "Establishing Wi-Fi Connection" section in esp-idf/examples/protocols/README.md
      *        for more information about this function.
      */
-    ESP_ERROR_CHECK(example_connect());
+    ESP_ERROR_CHECK(my_wifi_connect());
 
 
     /*
