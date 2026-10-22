@@ -1,0 +1,49 @@
+{
+  "input_file": "captures/csi_1000hz_validation.csi",
+  "file_size_bytes": 2462214,
+  "parsed_bytes": 2462214,
+  "frame_count": 10009,
+  "first_sequence": 0,
+  "last_sequence": 10008,
+  "sequence_gaps": 0,
+  "sequence_non_increasing": 0,
+  "first_timestamp_us": 25638980,
+  "last_timestamp_us": 35636147,
+  "timestamp_span_us": 9997167,
+  "timestamp_non_increasing": 0,
+  "timestamp_wraps": 0,
+  "actual_csi_hz": 1001.083607,
+  "csi_length_values": [
+    228
+  ],
+  "complex_count_values": [
+    114
+  ],
+  "odd_length_frames": 0,
+  "first_word_invalid_frames": 0,
+  "rssi_min": -39,
+  "rssi_avg": -37.984814,
+  "rssi_max": -37,
+  "channels": [
+    7
+  ],
+  "rx_formats": [
+    2
+  ],
+  "flags": [
+    0
+  ],
+  "interval_us": {
+    "min": 115,
+    "average": 998.917566,
+    "median": 265.5,
+    "p95": 3350,
+    "p99": 10616,
+    "max": 47870
+  },
+  "capture_summary_file": "captures/csi_1000hz_validation.csi.json",
+  "capture_summary_consistency": {
+    "captured_frame_count_matches": true,
+    "processed_frame_count_matches": true
+  }
+}
