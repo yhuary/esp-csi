@@ -41,7 +41,7 @@
 #include "protocol_examples_common.h"
 #include "esp_csi_gain_ctrl.h"
 
-#define CONFIG_SEND_FREQUENCY 100
+#define CONFIG_SEND_FREQUENCY 500
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
 #define CSI_FORCE_LLTF 0
 #endif
