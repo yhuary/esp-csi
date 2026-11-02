@@ -36,19 +36,21 @@
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
-#include "ping/ping_sock.h"
+#include "esp_timer.h"
+#include "lwip/def.h"
+#include <errno.h>
 
 #include "protocol_examples_common.h"
 #include "esp_csi_gain_ctrl.h"
 
-#define CONFIG_SEND_FREQUENCY 500
+#define CONFIG_SEND_FREQUENCY 800// target ICMP Echo Requests per second
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
 #define CSI_FORCE_LLTF 0
 #endif
 #define CONFIG_FORCE_GAIN 0
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32C61
-#define CONFIG_GAIN_CONTROL 1
+#define CONFIG_GAIN_CONTROL 0
 #endif
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
@@ -58,7 +60,7 @@
 static const char *TAG = "csi_recv_router";
 /*キューに入れる箱の形*/
 #define CSI_MAX_LEN 512
-#define CSI_QUEUE_SIZE 20
+#define CSI_QUEUE_SIZE 64
 
 typedef struct
 {
@@ -101,30 +103,26 @@ static uint32_t csi_dropped_count = 0;
 static void csi_process_task(void *arg)
 {
     csi_queue_item_t item;
+    uint8_t frame[8 + CSI_MAX_LEN];
+    frame[0] = 0xAA;
+    frame[1] = 0x55;
 
-
-    while (1)
-    {
-        if (xQueueReceive(csi_queue, &item, portMAX_DELAY) == pdTRUE)
-        {
-            csi_processed_count++;
-
-            // 先頭マーカー
-            const uint8_t header[2] = {0xAA, 0x55};
-
-            // CSIデータの長さ
-            uint16_t len = (uint16_t)item.len;
-
-            // タイムスタンプ
-            uint32_t timestamp = item.timestamp;
-
-            
-            // UARTにバイナリ送信
-            uart_write_bytes(UART_NUM_0, header, sizeof(header));
-            uart_write_bytes(UART_NUM_0, &timestamp, sizeof(timestamp));
-            uart_write_bytes(UART_NUM_0, &len, sizeof(len));
-            uart_write_bytes(UART_NUM_0, item.data, item.len);
-        
+    while (1) {
+        if (xQueueReceive(csi_queue, &item, portMAX_DELAY) == pdTRUE) {
+            const uint32_t ts = item.timestamp;
+            const uint16_t len = (uint16_t)item.len;
+            // Explicit little-endian encoding, matching Python int.from_bytes(..., "little")
+            frame[2] = (uint8_t)ts;
+            frame[3] = (uint8_t)(ts >> 8);
+            frame[4] = (uint8_t)(ts >> 16);
+            frame[5] = (uint8_t)(ts >> 24);
+            frame[6] = (uint8_t)len;
+            frame[7] = (uint8_t)(len >> 8);
+            memcpy(frame + 8, item.data, len);
+            const int written = uart_write_bytes(UART_NUM_0, frame, 8 + len);
+            if (written == (int)(8 + len)) {
+                csi_processed_count++; // accepted by UART driver, not proof of PC receipt
+            }
         }
     }
 }
@@ -280,25 +278,12 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)//ctx
 
     item.first_word_invalid = info->first_word_invalid;
 
-    // LTF判定用の実測ログ（最初の10件だけ表示）
-    if (s_count < 10)
-    {
-        ESP_LOGI(TAG,
-            "CSI CHECK: ch=%u, rx_format=%u, second=%u, stbc=%u, len=%d, first_invalid=%d",
-            (unsigned)item.channel,
-            (unsigned)item.rx_format,
-            (unsigned)item.secondary_channel,
-            (unsigned)item.stbc,
-            item.len,
-            (int)item.first_word_invalid);
-    }
-
     /*
      * CSIデータが配列サイズを超えないようにする
      */
-    if (item.len > CSI_MAX_LEN)
-    {
-        item.len = CSI_MAX_LEN;
+    if (item.len <= 0 || item.len > CSI_MAX_LEN) {
+        csi_dropped_count++;
+        return;
     }
 
     memcpy(item.data, info->buf, item.len);
@@ -365,40 +350,132 @@ static void wifi_csi_init()
 }
 
 
-static void wifi_ping_on_success(esp_ping_handle_t hdl, void *args)
+// ICMP Echo Request (IPv4), wire format. Separate send/receive tasks.
+// The Python CSI binary framing remains unchanged.
+#define ICMP_ECHO_REQUEST 8
+#define ICMP_ECHO_REPLY   0
+#define ICMP_IDENTIFIER  0xC512
+#define ICMP_PACKET_LEN  16
+
+static int icmp_sock = -1;
+static struct sockaddr_in icmp_target;
+static TaskHandle_t icmp_sender_handle = NULL;
+static esp_timer_handle_t icmp_timer = NULL;
+static volatile uint32_t icmp_send_ok_count = 0;
+static volatile uint32_t icmp_send_error_count = 0;
+static volatile uint32_t icmp_timer_missed_count = 0;
+
+static uint16_t icmp_checksum(const uint8_t *data, size_t len)
 {
-    ping_reply_count++;
+    uint32_t sum = 0;
+    while (len >= 2) {
+        sum += ((uint16_t)data[0] << 8) | data[1];
+        data += 2;
+        len -= 2;
+    }
+    if (len) sum += ((uint16_t)data[0] << 8);
+    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    return (uint16_t)~sum;
 }
 
-static void wifi_ping_on_timeout(esp_ping_handle_t hdl, void *args)
+static void icmp_tick_callback(void *arg)
 {
-    ping_timeout_count++;
+    if (icmp_sender_handle != NULL) {
+        xTaskNotifyGive(icmp_sender_handle);
+    }
 }
 
-static esp_err_t wifi_ping_router_start()
+static void icmp_sender_task(void *arg)
 {
-    static esp_ping_handle_t ping_handle = NULL;
+    uint16_t sequence = 0;
+    uint8_t packet[ICMP_PACKET_LEN] = {0};
+    packet[0] = ICMP_ECHO_REQUEST;
+    packet[4] = (uint8_t)(ICMP_IDENTIFIER >> 8);
+    packet[5] = (uint8_t)ICMP_IDENTIFIER;
+    // Small fixed payload; the CSI is taken from the AP's Echo Reply.
+    for (int i = 8; i < ICMP_PACKET_LEN; ++i) packet[i] = (uint8_t)i;
 
-    esp_ping_config_t ping_config = ESP_PING_DEFAULT_CONFIG();
-    ping_config.count = 0;
-    ping_config.interval_ms = 1000 / CONFIG_SEND_FREQUENCY;
-    ping_config.task_stack_size = 3072;
-    ping_config.data_size = 1;
+    for (;;) {
+        // Discard backlog instead of generating an artificial burst after stalls.
+        uint32_t ticks = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (ticks > 1) icmp_timer_missed_count += ticks - 1;
+        packet[6] = (uint8_t)(sequence >> 8);
+        packet[7] = (uint8_t)sequence;
+        sequence++;
+        packet[2] = 0;
+        packet[3] = 0;
+        uint16_t checksum = icmp_checksum(packet, sizeof(packet));
+        packet[2] = (uint8_t)(checksum >> 8);
+        packet[3] = (uint8_t)checksum;
 
+        int n = sendto(icmp_sock, packet, sizeof(packet), 0,
+                       (struct sockaddr *)&icmp_target, sizeof(icmp_target));
+        if (n == (int)sizeof(packet)) icmp_send_ok_count++;
+        else icmp_send_error_count++;
+    }
+}
+
+static void icmp_receiver_task(void *arg)
+{
+    uint8_t packet[160];
+    for (;;) {
+        struct sockaddr_in from;
+        socklen_t fromlen = sizeof(from);
+        int n = recvfrom(icmp_sock, packet, sizeof(packet), 0,
+                         (struct sockaddr *)&from, &fromlen);
+        if (n <= 0) continue;
+        if (from.sin_addr.s_addr != icmp_target.sin_addr.s_addr) continue;
+
+        // lwIP raw IPv4 sockets generally return an IP header before ICMP.
+        // Accept both representations defensively.
+        int offset = 0;
+        if ((packet[0] >> 4) == 4) {
+            offset = (packet[0] & 0x0f) * 4;
+            if (offset < 20 || offset > n) continue;
+        }
+        if (n - offset < 8) continue;
+        const uint8_t *icmp = packet + offset;
+        if (icmp[0] != ICMP_ECHO_REPLY || icmp[1] != 0) continue;
+        uint16_t id = ((uint16_t)icmp[4] << 8) | icmp[5];
+        if (id == ICMP_IDENTIFIER) ping_reply_count++;
+    }
+}
+
+static esp_err_t wifi_ping_router_start(void)
+{
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t local_ip;
-    esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &local_ip);
-    ESP_LOGI(TAG, "got ip:" IPSTR ", gw: " IPSTR, IP2STR(&local_ip.ip), IP2STR(&local_ip.gw));
-    ping_config.target_addr.u_addr.ip4.addr = ip4_addr_get_u32(&local_ip.gw);
-    ping_config.target_addr.type = ESP_IPADDR_TYPE_V4;
+    if (!netif || esp_netif_get_ip_info(netif, &local_ip) != ESP_OK) {
+        return ESP_FAIL;
+    }
 
-   
-    esp_ping_callbacks_t cbs = {
-    .on_ping_success = wifi_ping_on_success,
-    .on_ping_timeout = wifi_ping_on_timeout,
-};
-    esp_ping_new_session(&ping_config, &cbs, &ping_handle);
-    esp_ping_start(ping_handle);
+    icmp_target.sin_family = AF_INET;
+    icmp_target.sin_port = 0;
+    icmp_target.sin_addr.s_addr = ip4_addr_get_u32(&local_ip.gw);
+    icmp_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if (icmp_sock < 0) {
+        ESP_LOGE(TAG, "ICMP raw socket failed: errno=%d", errno);
+        return ESP_FAIL;
+    }
 
+    // The timer callback only notifies; network I/O runs in a normal task.
+    if (xTaskCreate(icmp_receiver_task, "icmp_receiver", 3072, NULL, 6, NULL) != pdPASS ||
+        xTaskCreate(icmp_sender_task, "icmp_sender", 3072, NULL, 6,
+                    &icmp_sender_handle) != pdPASS) {
+        close(icmp_sock);
+        icmp_sock = -1;
+        return ESP_ERR_NO_MEM;
+    }
+    const esp_timer_create_args_t timer_args = {
+        .callback = &icmp_tick_callback,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "icmp_tick",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &icmp_timer));
+    // 1000 Hz -> 1000 us; independent of Echo Reply arrival.
+    ESP_ERROR_CHECK(esp_timer_start_periodic(icmp_timer,
+                                            1000000ULL / CONFIG_SEND_FREQUENCY));
     return ESP_OK;
 }
 
@@ -676,7 +753,7 @@ void app_main()
     if (!uart_is_driver_installed(UART_NUM_0))
     {
         uart_config_t uart_config = {
-            .baud_rate = 921600,
+            .baud_rate = 2000000,
             .data_bits = UART_DATA_8_BITS,
             .parity = UART_PARITY_DISABLE,
             .stop_bits = UART_STOP_BITS_1,
@@ -695,8 +772,8 @@ void app_main()
             0
         ));
     }
-
-
+    // Apply baud rate even when UART0 was already installed by the console.
+    ESP_ERROR_CHECK(uart_set_baudrate(UART_NUM_0, 2000000));
 
     /**
      * @brief This helper function configures Wi-Fi, as selected in menuconfig.
@@ -737,17 +814,7 @@ void app_main()
         return;
     }
 
-    /*
-     * 60秒後に結果を表示するTaskを作成
-     */
-    xTaskCreate(
-        csi_stats_task,
-        "csi_stats_task",
-        2048,
-        NULL,
-        4,
-        NULL);
-
+    // Do not start stats logger: its text would corrupt the binary UART stream.
     wifi_csi_init();
-    wifi_ping_router_start();
+    ESP_ERROR_CHECK(wifi_ping_router_start());
 }
