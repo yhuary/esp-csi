@@ -102,6 +102,8 @@ static uint32_t csi_dropped_count = 0;
 /* QueueにCSIが来るまで待って、来たら item に取り出す*/
 static void csi_process_task(void *arg)
 {
+    (void)arg;
+
     csi_queue_item_t item;
     uint8_t frame[8 + CSI_MAX_LEN];
     frame[0] = 0xAA;
@@ -130,8 +132,10 @@ static void csi_process_task(void *arg)
 /*
  * 60秒後にCSIの受信・処理・ドロップ数を表示するTask
  */
-static void csi_stats_task(void *arg)
+static void __attribute__((unused)) csi_stats_task(void *arg)
 {
+    (void)arg;
+
     /*
      * 60秒待つ
      */
@@ -186,10 +190,10 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)//ctx
 
     const wifi_pkt_rx_ctrl_t *rx_ctrl = &info->rx_ctrl;
     static int s_count = 0;
+#if CONFIG_GAIN_CONTROL
     float compensate_gain = 1.0f;
     static uint8_t agc_gain = 0;
     static int8_t fft_gain = 0;
-#if CONFIG_GAIN_CONTROL
     static uint8_t agc_gain_baseline = 0;
     static int8_t fft_gain_baseline = 0;
     esp_csi_gain_ctrl_get_rx_gain(rx_ctrl, &agc_gain, &fft_gain);
@@ -296,7 +300,7 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)//ctx
     s_count++;
 }
 
-static void wifi_csi_init()
+static void wifi_csi_init(void)
 {
     /**
      * @brief In order to ensure the compatibility of routers, only LLTF sub-carriers are selected.
@@ -380,6 +384,8 @@ static uint16_t icmp_checksum(const uint8_t *data, size_t len)
 
 static void icmp_tick_callback(void *arg)
 {
+    (void)arg;
+
     if (icmp_sender_handle != NULL) {
         xTaskNotifyGive(icmp_sender_handle);
     }
@@ -387,6 +393,8 @@ static void icmp_tick_callback(void *arg)
 
 static void icmp_sender_task(void *arg)
 {
+    (void)arg;
+
     uint16_t sequence = 0;
     uint8_t packet[ICMP_PACKET_LEN] = {0};
     packet[0] = ICMP_ECHO_REQUEST;
@@ -417,6 +425,8 @@ static void icmp_sender_task(void *arg)
 
 static void icmp_receiver_task(void *arg)
 {
+    (void)arg;
+
     uint8_t packet[160];
     for (;;) {
         struct sockaddr_in from;
@@ -479,28 +489,17 @@ static esp_err_t wifi_ping_router_start(void)
     return ESP_OK;
 }
 
-static void wifi_set_ht_protocols(void)
-{
-    wifi_protocols_t protocols = {
-        .ghz_2g = WIFI_PROTOCOL_11B |
-                  WIFI_PROTOCOL_11G |
-                  WIFI_PROTOCOL_11N,
-
-        .ghz_5g = WIFI_PROTOCOL_11A |
-                  WIFI_PROTOCOL_11N
-    };
-
-    ESP_ERROR_CHECK(
-        esp_wifi_set_protocols(WIFI_IF_STA, &protocols)
-    );
-}
-
 static void my_wifi_got_ip_handler(
     void *arg,
     esp_event_base_t event_base,
     int32_t event_id,
     void *event_data)
 {
+    (void)arg;
+    (void)event_base;
+    (void)event_id;
+    (void)event_data;
+
     ESP_LOGI(TAG, "IP address acquired");
 
     s_retry_num = 0;
@@ -522,6 +521,11 @@ static void my_wifi_disconnected_handler(
     int32_t event_id,
     void *event_data)
 {
+    (void)arg;
+    (void)event_base;
+    (void)event_id;
+    (void)event_data;
+
     ESP_LOGW(TAG, "Wi-Fi disconnected");
 
     // 接続済みの状態を解除
@@ -743,7 +747,7 @@ cleanup:
     return err;
 }
 
-void app_main()
+void app_main(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
