@@ -43,7 +43,7 @@
 #include "protocol_examples_common.h"
 #include "esp_csi_gain_ctrl.h"
 
-#define CONFIG_SEND_FREQUENCY 800// target ICMP Echo Requests per second
+#define CONFIG_SEND_FREQUENCY 500 // target ICMP Echo Requests per second
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
 #define CSI_FORCE_LLTF 0
 #endif
@@ -78,11 +78,10 @@ typedef struct
     int8_t data[CSI_MAX_LEN];
 } csi_queue_item_t;
 
-
 #define WIFI_MAXIMUM_RETRY 3
 
 #define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
+#define WIFI_FAIL_BIT BIT1
 
 static EventGroupHandle_t s_wifi_event_group = NULL;
 static int s_retry_num = 0;
@@ -91,7 +90,6 @@ static int s_retry_num = 0;
 static bool s_wifi_shutting_down = false;
 
 static QueueHandle_t csi_queue = NULL;
-
 
 static uint32_t ping_reply_count = 0;
 static uint32_t ping_timeout_count = 0;
@@ -107,8 +105,10 @@ static void csi_process_task(void *arg)
     frame[0] = 0xAA;
     frame[1] = 0x55;
 
-    while (1) {
-        if (xQueueReceive(csi_queue, &item, portMAX_DELAY) == pdTRUE) {
+    while (1)
+    {
+        if (xQueueReceive(csi_queue, &item, portMAX_DELAY) == pdTRUE)
+        {
             const uint32_t ts = item.timestamp;
             const uint16_t len = (uint16_t)item.len;
             // Explicit little-endian encoding, matching Python int.from_bytes(..., "little")
@@ -120,7 +120,8 @@ static void csi_process_task(void *arg)
             frame[7] = (uint8_t)(len >> 8);
             memcpy(frame + 8, item.data, len);
             const int written = uart_write_bytes(UART_NUM_0, frame, 8 + len);
-            if (written == (int)(8 + len)) {
+            if (written == (int)(8 + len))
+            {
                 csi_processed_count++; // accepted by UART driver, not proof of PC receipt
             }
         }
@@ -142,7 +143,6 @@ static void csi_stats_task(void *arg)
      */
     ESP_LOGI(TAG, "===== 20 SEC RESULT =====");
 
-
     ESP_LOGI(TAG, "CSI received  : %lu",
              (unsigned long)csi_received_count);
 
@@ -153,14 +153,13 @@ static void csi_stats_task(void *arg)
              (unsigned long)csi_dropped_count);
 
     ESP_LOGI(TAG, "Ping reply     : %lu",
-            (unsigned long)ping_reply_count);
+             (unsigned long)ping_reply_count);
 
     ESP_LOGI(TAG, "Ping timeout   : %lu",
-         (unsigned long)ping_timeout_count);
+             (unsigned long)ping_timeout_count);
 
     ESP_LOGI(TAG, "Ping total     : %lu",
-         (unsigned long)(ping_reply_count + ping_timeout_count));
-         
+             (unsigned long)(ping_reply_count + ping_timeout_count));
 
     ESP_LOGI(TAG, "=========================");
 
@@ -170,7 +169,7 @@ static void csi_stats_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)//ctx 
+static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info) // ctx
 {
 
     if (!info || !info->buf)
@@ -281,7 +280,8 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)//ctx
     /*
      * CSIデータが配列サイズを超えないようにする
      */
-    if (item.len <= 0 || item.len > CSI_MAX_LEN) {
+    if (item.len <= 0 || item.len > CSI_MAX_LEN)
+    {
         csi_dropped_count++;
         return;
     }
@@ -349,13 +349,12 @@ static void wifi_csi_init()
     ESP_ERROR_CHECK(esp_wifi_set_csi(true));
 }
 
-
 // ICMP Echo Request (IPv4), wire format. Separate send/receive tasks.
 // The Python CSI binary framing remains unchanged.
 #define ICMP_ECHO_REQUEST 8
-#define ICMP_ECHO_REPLY   0
-#define ICMP_IDENTIFIER  0xC512
-#define ICMP_PACKET_LEN  16
+#define ICMP_ECHO_REPLY 0
+#define ICMP_IDENTIFIER 0xC512
+#define ICMP_PACKET_LEN 16
 
 static int icmp_sock = -1;
 static struct sockaddr_in icmp_target;
@@ -368,19 +367,23 @@ static volatile uint32_t icmp_timer_missed_count = 0;
 static uint16_t icmp_checksum(const uint8_t *data, size_t len)
 {
     uint32_t sum = 0;
-    while (len >= 2) {
+    while (len >= 2)
+    {
         sum += ((uint16_t)data[0] << 8) | data[1];
         data += 2;
         len -= 2;
     }
-    if (len) sum += ((uint16_t)data[0] << 8);
-    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    if (len)
+        sum += ((uint16_t)data[0] << 8);
+    while (sum >> 16)
+        sum = (sum & 0xffff) + (sum >> 16);
     return (uint16_t)~sum;
 }
 
 static void icmp_tick_callback(void *arg)
 {
-    if (icmp_sender_handle != NULL) {
+    if (icmp_sender_handle != NULL)
+    {
         xTaskNotifyGive(icmp_sender_handle);
     }
 }
@@ -393,12 +396,15 @@ static void icmp_sender_task(void *arg)
     packet[4] = (uint8_t)(ICMP_IDENTIFIER >> 8);
     packet[5] = (uint8_t)ICMP_IDENTIFIER;
     // Small fixed payload; the CSI is taken from the AP's Echo Reply.
-    for (int i = 8; i < ICMP_PACKET_LEN; ++i) packet[i] = (uint8_t)i;
+    for (int i = 8; i < ICMP_PACKET_LEN; ++i)
+        packet[i] = (uint8_t)i;
 
-    for (;;) {
+    for (;;)
+    {
         // Discard backlog instead of generating an artificial burst after stalls.
         uint32_t ticks = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (ticks > 1) icmp_timer_missed_count += ticks - 1;
+        if (ticks > 1)
+            icmp_timer_missed_count += ticks - 1;
         packet[6] = (uint8_t)(sequence >> 8);
         packet[7] = (uint8_t)sequence;
         sequence++;
@@ -410,34 +416,44 @@ static void icmp_sender_task(void *arg)
 
         int n = sendto(icmp_sock, packet, sizeof(packet), 0,
                        (struct sockaddr *)&icmp_target, sizeof(icmp_target));
-        if (n == (int)sizeof(packet)) icmp_send_ok_count++;
-        else icmp_send_error_count++;
+        if (n == (int)sizeof(packet))
+            icmp_send_ok_count++;
+        else
+            icmp_send_error_count++;
     }
 }
 
 static void icmp_receiver_task(void *arg)
 {
     uint8_t packet[160];
-    for (;;) {
+    for (;;)
+    {
         struct sockaddr_in from;
         socklen_t fromlen = sizeof(from);
         int n = recvfrom(icmp_sock, packet, sizeof(packet), 0,
                          (struct sockaddr *)&from, &fromlen);
-        if (n <= 0) continue;
-        if (from.sin_addr.s_addr != icmp_target.sin_addr.s_addr) continue;
+        if (n <= 0)
+            continue;
+        if (from.sin_addr.s_addr != icmp_target.sin_addr.s_addr)
+            continue;
 
         // lwIP raw IPv4 sockets generally return an IP header before ICMP.
         // Accept both representations defensively.
         int offset = 0;
-        if ((packet[0] >> 4) == 4) {
+        if ((packet[0] >> 4) == 4)
+        {
             offset = (packet[0] & 0x0f) * 4;
-            if (offset < 20 || offset > n) continue;
+            if (offset < 20 || offset > n)
+                continue;
         }
-        if (n - offset < 8) continue;
+        if (n - offset < 8)
+            continue;
         const uint8_t *icmp = packet + offset;
-        if (icmp[0] != ICMP_ECHO_REPLY || icmp[1] != 0) continue;
+        if (icmp[0] != ICMP_ECHO_REPLY || icmp[1] != 0)
+            continue;
         uint16_t id = ((uint16_t)icmp[4] << 8) | icmp[5];
-        if (id == ICMP_IDENTIFIER) ping_reply_count++;
+        if (id == ICMP_IDENTIFIER)
+            ping_reply_count++;
     }
 }
 
@@ -445,7 +461,8 @@ static esp_err_t wifi_ping_router_start(void)
 {
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t local_ip;
-    if (!netif || esp_netif_get_ip_info(netif, &local_ip) != ESP_OK) {
+    if (!netif || esp_netif_get_ip_info(netif, &local_ip) != ESP_OK)
+    {
         return ESP_FAIL;
     }
 
@@ -453,7 +470,8 @@ static esp_err_t wifi_ping_router_start(void)
     icmp_target.sin_port = 0;
     icmp_target.sin_addr.s_addr = ip4_addr_get_u32(&local_ip.gw);
     icmp_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-    if (icmp_sock < 0) {
+    if (icmp_sock < 0)
+    {
         ESP_LOGE(TAG, "ICMP raw socket failed: errno=%d", errno);
         return ESP_FAIL;
     }
@@ -461,7 +479,8 @@ static esp_err_t wifi_ping_router_start(void)
     // The timer callback only notifies; network I/O runs in a normal task.
     if (xTaskCreate(icmp_receiver_task, "icmp_receiver", 3072, NULL, 6, NULL) != pdPASS ||
         xTaskCreate(icmp_sender_task, "icmp_sender", 3072, NULL, 6,
-                    &icmp_sender_handle) != pdPASS) {
+                    &icmp_sender_handle) != pdPASS)
+    {
         close(icmp_sock);
         icmp_sock = -1;
         return ESP_ERR_NO_MEM;
@@ -475,7 +494,7 @@ static esp_err_t wifi_ping_router_start(void)
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &icmp_timer));
     // 1000 Hz -> 1000 us; independent of Echo Reply arrival.
     ESP_ERROR_CHECK(esp_timer_start_periodic(icmp_timer,
-                                            1000000ULL / CONFIG_SEND_FREQUENCY));
+                                             1000000ULL / CONFIG_SEND_FREQUENCY));
     return ESP_OK;
 }
 
@@ -487,12 +506,10 @@ static void wifi_set_ht_protocols(void)
                   WIFI_PROTOCOL_11N,
 
         .ghz_5g = WIFI_PROTOCOL_11A |
-                  WIFI_PROTOCOL_11N
-    };
+                  WIFI_PROTOCOL_11N};
 
     ESP_ERROR_CHECK(
-        esp_wifi_set_protocols(WIFI_IF_STA, &protocols)
-    );
+        esp_wifi_set_protocols(WIFI_IF_STA, &protocols));
 }
 
 static void my_wifi_got_ip_handler(
@@ -507,13 +524,11 @@ static void my_wifi_got_ip_handler(
 
     xEventGroupClearBits(
         s_wifi_event_group,
-        WIFI_FAIL_BIT
-    );
+        WIFI_FAIL_BIT);
 
     xEventGroupSetBits(
         s_wifi_event_group,
-        WIFI_CONNECTED_BIT
-    );
+        WIFI_CONNECTED_BIT);
 }
 
 static void my_wifi_disconnected_handler(
@@ -527,16 +542,17 @@ static void my_wifi_disconnected_handler(
     // 接続済みの状態を解除
     xEventGroupClearBits(
         s_wifi_event_group,
-        WIFI_CONNECTED_BIT
-    );
+        WIFI_CONNECTED_BIT);
 
     // 後始末中なら再接続しない
-    if (s_wifi_shutting_down) {
+    if (s_wifi_shutting_down)
+    {
         return;
     }
 
     // 最大3回まで再接続
-    if (s_retry_num < WIFI_MAXIMUM_RETRY) {
+    if (s_retry_num < WIFI_MAXIMUM_RETRY)
+    {
 
         s_retry_num++;
 
@@ -547,7 +563,8 @@ static void my_wifi_disconnected_handler(
 
         esp_err_t err = esp_wifi_connect();
 
-        if (err == ESP_OK) {
+        if (err == ESP_OK)
+        {
             return;
         }
 
@@ -559,8 +576,7 @@ static void my_wifi_disconnected_handler(
     // 再接続できない場合は失敗を通知
     xEventGroupSetBits(
         s_wifi_event_group,
-        WIFI_FAIL_BIT
-    );
+        WIFI_FAIL_BIT);
 }
 
 static esp_err_t my_wifi_connect(void)
@@ -579,14 +595,16 @@ static esp_err_t my_wifi_connect(void)
     esp_netif_t *sta_netif =
         esp_netif_create_default_wifi_sta();
 
-    if (sta_netif == NULL) {
+    if (sta_netif == NULL)
+    {
         return ESP_ERR_NO_MEM;
     }
 
     // ② Event Group作成
     s_wifi_event_group = xEventGroupCreate();
 
-    if (s_wifi_event_group == NULL) {
+    if (s_wifi_event_group == NULL)
+    {
         err = ESP_ERR_NO_MEM;
         goto cleanup;
     }
@@ -595,14 +613,16 @@ static esp_err_t my_wifi_connect(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 
     err = esp_wifi_init(&cfg);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         goto cleanup;
     }
     wifi_initialized = true;
 
     // ④ STAモード設定
     err = esp_wifi_set_mode(WIFI_MODE_STA);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         goto cleanup;
     }
 
@@ -612,9 +632,9 @@ static esp_err_t my_wifi_connect(void)
         IP_EVENT_STA_GOT_IP,
         &my_wifi_got_ip_handler,
         NULL,
-        &got_ip_instance
-    );
-    if (err != ESP_OK) {
+        &got_ip_instance);
+    if (err != ESP_OK)
+    {
         goto cleanup;
     }
 
@@ -623,15 +643,16 @@ static esp_err_t my_wifi_connect(void)
         WIFI_EVENT_STA_DISCONNECTED,
         &my_wifi_disconnected_handler,
         NULL,
-        &disconnected_instance
-    );
-    if (err != ESP_OK) {
+        &disconnected_instance);
+    if (err != ESP_OK)
+    {
         goto cleanup;
     }
 
     // ⑥ Wi-Fiドライバ起動
     err = esp_wifi_start();
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         goto cleanup;
     }
     wifi_started = true;
@@ -643,11 +664,11 @@ static esp_err_t my_wifi_connect(void)
                   WIFI_PROTOCOL_11N,
 
         .ghz_5g = WIFI_PROTOCOL_11A |
-                  WIFI_PROTOCOL_11N
-    };
+                  WIFI_PROTOCOL_11N};
 
     err = esp_wifi_set_protocols(WIFI_IF_STA, &protocols);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         goto cleanup;
     }
 
@@ -660,13 +681,15 @@ static esp_err_t my_wifi_connect(void)
     };
 
     err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         goto cleanup;
     }
 
     // ⑨ APへの接続開始
     err = esp_wifi_connect();
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         goto cleanup;
     }
 
@@ -676,16 +699,17 @@ static esp_err_t my_wifi_connect(void)
         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
         pdFALSE,
         pdFALSE,
-        pdMS_TO_TICKS(10000)
-    );
+        pdMS_TO_TICKS(10000));
 
-    if (bits & WIFI_FAIL_BIT) {
+    if (bits & WIFI_FAIL_BIT)
+    {
         ESP_LOGE(TAG, "Wi-Fi connection failed");
         err = ESP_FAIL;
         goto cleanup;
     }
 
-    if (!(bits & WIFI_CONNECTED_BIT)) {
+    if (!(bits & WIFI_CONNECTED_BIT))
+    {
         ESP_LOGE(TAG, "Wi-Fi connection timeout");
         err = ESP_ERR_TIMEOUT;
         goto cleanup;
@@ -705,34 +729,37 @@ cleanup:
     s_wifi_shutting_down = true;
 
     // Wi-Fiを停止
-    if (wifi_started) {
+    if (wifi_started)
+    {
         esp_wifi_stop();
     }
 
     // イベントハンドラ登録を解除
-    if (disconnected_instance != NULL) {
+    if (disconnected_instance != NULL)
+    {
         esp_event_handler_instance_unregister(
             WIFI_EVENT,
             WIFI_EVENT_STA_DISCONNECTED,
-            disconnected_instance
-        );
+            disconnected_instance);
     }
 
-    if (got_ip_instance != NULL) {
+    if (got_ip_instance != NULL)
+    {
         esp_event_handler_instance_unregister(
             IP_EVENT,
             IP_EVENT_STA_GOT_IP,
-            got_ip_instance
-        );
+            got_ip_instance);
     }
 
     // Wi-Fiドライバの後始末
-    if (wifi_initialized) {
+    if (wifi_initialized)
+    {
         esp_wifi_deinit();
     }
 
     // Event Group削除
-    if (s_wifi_event_group != NULL) {
+    if (s_wifi_event_group != NULL)
+    {
         vEventGroupDelete(s_wifi_event_group);
         s_wifi_event_group = NULL;
     }
@@ -749,7 +776,7 @@ void app_main()
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-        // UART0ドライバが未インストールの場合だけ初期化
+    // UART0ドライバが未インストールの場合だけ初期化
     if (!uart_is_driver_installed(UART_NUM_0))
     {
         uart_config_t uart_config = {
@@ -769,8 +796,7 @@ void app_main()
             4096,
             0,
             NULL,
-            0
-        ));
+            0));
     }
     // Apply baud rate even when UART0 was already installed by the console.
     ESP_ERROR_CHECK(uart_set_baudrate(UART_NUM_0, 2000000));
@@ -781,7 +807,6 @@ void app_main()
      *        for more information about this function.
      */
     ESP_ERROR_CHECK(my_wifi_connect());
-
 
     /*
      * CSIデータを一時的に入れるQueueを作成
